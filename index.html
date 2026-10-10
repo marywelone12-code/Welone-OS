@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Island Quest — a WELL GO-TO adventure</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap">
+<style>
+html,body{height:100%;margin:0;background:#082D32;color:#F7F9F8;font-family:Inter,Arial,sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.hud{position:fixed;left:0;right:0;top:0;display:flex;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 0;pointer-events:none}
+.pill{background:rgba(8,45,50,.78);border:1px solid rgba(99,214,190,.35);border-radius:30px;padding:8px 16px;font-weight:700;font-size:18px;display:flex;gap:6px;align-items:center}
+.hint{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);max-width:88vw;text-align:center;font-size:17px;font-weight:600;background:rgba(8,45,50,.78);border-radius:30px;padding:10px 20px;pointer-events:none}
+.toast{position:fixed;left:50%;top:22%;transform:translate(-50%,-10px);background:#63D6BE;color:#082D32;font-weight:700;font-size:20px;padding:12px 22px;border-radius:16px;opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;text-align:center;max-width:86vw}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.ov{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:24px;background:rgba(8,45,50,.86)}
+.ov.hide{display:none}
+.ov h1{margin:0;font-size:clamp(36px,8vw,64px);line-height:1.05}
+.ov p{margin:0;max-width:34ch;font-size:21px;line-height:1.45;color:#DDF5EE}
+.ov button{margin-top:8px;font:700 20px Inter,Arial,sans-serif;background:#63D6BE;color:#082D32;border:0;border-radius:40px;padding:16px 36px;min-height:52px;cursor:pointer}
+.ov button:hover{background:#DDF5EE}
+.ov button:focus-visible{outline:3px solid #F7F9F8;outline-offset:3px}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Island map. Move with arrow keys, WASD or by dragging."></canvas>
+<div class="hud"><div class="pill" id="hearts" aria-label="Health"></div><div class="pill"><span id="got">0</span>/5 postcards</div></div>
+<div class="hint" id="hint">Find the 5 postcards hidden on the island</div>
+<div class="toast" id="toast" role="status"></div>
+<div class="ov" id="ov"><h1 id="t"></h1><p id="m"></p><button id="b" type="button"></button></div>
+<script>
+(function(){
+var cv=document.getElementById('c'),x=cv.getContext('2d');
+var $=function(i){return document.getElementById(i)},ov=$('ov'),T0=$('t'),M0=$('m'),B0=$('b'),toast=$('toast'),hint=$('hint');
+var T=48,N=44,W=0,H=0,Z=1,dpr=1,st='intro',keys={},joy=null,time=0,tt=0;
+var NAMES=['Palawan','Bohol','Siargao','Cebu','Boracay'];
+function hs(a,b){var n=Math.sin(a*127.1+b*311.7)*43758.5453;return n-Math.floor(n)}
+function sm(t){return t*t*(3-2*t)}
+function ns(a,b){var i=Math.floor(a),j=Math.floor(b),u=sm(a-i),v=sm(b-j);return (hs(i,j)*(1-u)+hs(i+1,j)*u)*(1-v)+(hs(i,j+1)*(1-u)+hs(i+1,j+1)*u)*v}
+var map=[],trees=[],byTile={};
+for(var j=0;j<N;j++)for(var i=0;i<N;i++){
+var dx=(i-N/2)/(N*.46),dy=(j-N/2)/(N*.46),d=Math.sqrt(dx*dx+dy*dy);
+var hgt=1-d*1.05+(ns(i/5,j/5)-.5)*.55+(ns(i/2.2,j/2.2)-.5)*.12;
+var ty=hgt<0?0:hgt<.12?1:hgt<.22?2:3;
+if(ty===3&&ns(i/3+9,j/3+4)>.56&&hs(i,j)<.62)ty=4;
+map[j*N+i]=ty;
+if(ty===4){var tr={x:(i+.5)*T,y:(j+.5)*T,s:.85+hs(j,i)*.5,ph:hs(i+3,j)*6,k:'tree'};trees.push(tr);byTile[j*N+i]=tr}}
+function tile(i,j){return(i<0||j<0||i>=N||j>=N)?0:map[j*N+i]}
+function blocked(px,py){var i=Math.floor(px/T),j=Math.floor(py/T),t=tile(i,j);if(t===0)return true;if(t===4){var cx=(i+.5)*T,cy=(j+.5)*T;return Math.hypot(px-cx,py-cy)<21}return false}
+var start=null,boat=null;
+for(var i2=N-1;i2>0&&!start;i2--){if(tile(i2,N>>1)>=2){start={x:(i2+.5)*T,y:(N>>1)*T+T/2};boat={x:(i2+1.6)*T,y:(N>>1)*T+T/2,k:'boat'}}}
+var P={x:0,y:0,f:1,m:false,w:0,k:'p'},hearts=3,got=0,inv=0,pins=[],crabs=[],sparks=[],cam={x:0,y:0};
+function open(i,j){var t=tile(i,j);return t===2||t===3}
+function reset(){
+hearts=3;got=0;inv=0;pins=[];crabs=[];sparks=[];time=0;P.x=start.x;P.y=start.y;cam.x=P.x;cam.y=P.y;
+var tries=0;while(pins.length<5&&tries<6000){tries++;var i=2+Math.floor(Math.random()*(N-4)),j=2+Math.floor(Math.random()*(N-4));
+if(!open(i,j))continue;var px=(i+.5)*T,py=(j+.5)*T,ok=Math.hypot(px-start.x,py-start.y)>(tries<3000?14:6)*T;
+for(var q=0;q<pins.length;q++)if(Math.hypot(px-pins[q].x,py-pins[q].y)<(tries<3000?8:4)*T)ok=false;
+if(ok)pins.push({x:px,y:py,k:'pin',n:NAMES[pins.length],ph:Math.random()*6})}
+tries=0;while(crabs.length<5&&tries<4000){tries++;var a=Math.floor(Math.random()*N),b=Math.floor(Math.random()*N);
+if(tile(a,b)!==2)continue;var cx=(a+.5)*T,cy=(b+.5)*T;if(Math.hypot(cx-start.x,cy-start.y)<8*T)continue;
+var an=Math.random()*6.28;crabs.push({x:cx,y:cy,vx:Math.cos(an)*42,vy:Math.sin(an)*42,k:'crab',ph:Math.random()*6})}
+setH();$('got').textContent=0;hint.textContent='Find the 5 postcards hidden on the island'}
+function setH(){var s='';for(var i=0;i<3;i++)s+='<span style="color:'+(i<hearts?'#63D6BE':'#3E5A5F')+'">&#9679;</span>';$('hearts').innerHTML=s}
+function say(s){toast.textContent=s;toast.classList.add('on');clearTimeout(say.t);say.t=setTimeout(function(){toast.classList.remove('on')},2400)}
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*dpr;cv.height=H*dpr;Z=Math.max(.8,Math.min(1.5,W/(T*13)))}
+addEventListener('resize',resize);resize();
+var script=[['Mira, your guide','Welcome to the island. Five postcards are hidden here, each from a place worth going to.'],['Mira, your guide','Crabs patrol the beaches, so keep your distance. Follow the mint arrow if you get lost.'],['Mira, your guide','Find all five, then return to your boat. Where to next?']],si=0;
+function show(){var s=script[si];T0.textContent=s[0];M0.textContent=s[1];B0.textContent=si<2?'Next':'Start the adventure';ov.classList.remove('hide');B0.focus()}
+B0.addEventListener('click',function(){
+if(st==='intro'){si++;if(si<script.length)show();else{reset();st='play';ov.classList.add('hide')}}
+else{reset();st='play';ov.classList.add('hide')}});
+show();
+addEventListener('keydown',function(e){keys[e.key.toLowerCase()]=true;if(e.key.indexOf('Arrow')===0)e.preventDefault()});
+addEventListener('keyup',function(e){keys[e.key.toLowerCase()]=false});
+cv.addEventListener('pointerdown',function(e){joy={ox:e.clientX,oy:e.clientY,x:e.clientX,y:e.clientY}});
+cv.addEventListener('pointermove',function(e){if(joy){joy.x=e.clientX;joy.y=e.clientY}});
+addEventListener('pointerup',function(){joy=null});
+function move(o,vx,vy,dt,r){var nx=o.x+vx*dt,ny=o.y+vy*dt,ok=true;
+var ps=[[nx-r,o.y],[nx+r,o.y],[nx,o.y-r*.5],[nx,o.y+r*.5]];for(var k=0;k<4;k++)if(blocked(ps[k][0],ps[k][1]))ok=false;if(ok)o.x=nx;else if(o.bounce){o.vx*=-1}
+ok=true;ps=[[o.x-r,ny],[o.x+r,ny],[o.x,ny-r*.5],[o.x,ny+r*.5]];for(k=0;k<4;k++)if(blocked(ps[k][0],ps[k][1]))ok=false;if(ok)o.y=ny;else if(o.bounce){o.vy*=-1}}
+function burst(px,py,c){for(var i=0;i<16;i++){var a=Math.random()*6.28,v=40+Math.random()*120;sparks.push({x:px,y:py,vx:Math.cos(a)*v,vy:Math.sin(a)*v-40,l:.8,c:c})}}
+function end(win){st=win?'won':'lost';T0.textContent=win?'Next stop: Tokyo':'Washed ashore';
+M0.textContent=win?'All five postcards collected in '+Math.round(time)+' seconds. Your boat is ready. The adventure continues.':'The crabs got the best of you this time.';
+B0.textContent=win?'Explore again':'Try again';ov.classList.remove('hide');B0.focus()}
+function update(dt){
+time+=dt;var vx=(keys.arrowright||keys.d?1:0)-(keys.arrowleft||keys.a?1:0),vy=(keys.arrowdown||keys.s?1:0)-(keys.arrowup||keys.w?1:0);
+if(joy){var jx=joy.x-joy.ox,jy=joy.y-joy.oy,l=Math.hypot(jx,jy);if(l>8){var m=Math.min(1,l/60);vx=jx/l*m;vy=jy/l*m}}
+var l2=Math.hypot(vx,vy);if(l2>1){vx/=l2;vy/=l2}
+P.m=l2>.05;if(P.m){P.w+=dt;if(vx)P.f=vx>0?1:-1}
+var sh=tile(Math.floor(P.x/T),Math.floor(P.y/T))===1?.6:1;
+move(P,vx*150*sh,vy*150*sh,dt,11);
+for(var i=0;i<crabs.length;i++){var c=crabs[i];c.bounce=true;
+if(Math.random()<dt*.5){var a=Math.random()*6.28;c.vx=Math.cos(a)*42;c.vy=Math.sin(a)*42}
+move(c,c.vx,c.vy,dt,10);if(tile(Math.floor(c.x/T),Math.floor(c.y/T))!==2){c.vx*=-1;c.vy*=-1}
+if(inv<=0&&Math.hypot(c.x-P.x,c.y-P.y)<24){hearts--;inv=1.4;setH();burst(P.x,P.y,'#E8664F');var ax=P.x-c.x,ay=P.y-c.y,al=Math.hypot(ax,ay)||1;move(P,ax/al*2200,ay/al*2200,.05,11);if(hearts<=0){end(false);return}}}
+inv=Math.max(0,inv-dt);
+for(i=pins.length-1;i>=0;i--){var p=pins[i];if(Math.hypot(p.x-P.x,p.y-P.y)<32){pins.splice(i,1);got++;$('got').textContent=got;burst(p.x,p.y-20,'#63D6BE');say('Postcard from '+p.n);
+hint.textContent=got<5?(5-got)+' to go. Follow the mint arrow':'All found! Return to your boat'}}
+if(got===5&&Math.hypot(boat.x-P.x,boat.y-P.y)<56){end(true);return}
+for(i=sparks.length-1;i>=0;i--){var s=sparks[i];s.x+=s.vx*dt;s.y+=s.vy*dt;s.vy+=200*dt;s.l-=dt;if(s.l<=0)sparks.splice(i,1)}}
+function ground(vx0,vy0,vx1,vy1){
+for(var j=vy0;j<=vy1;j++)for(var i=vx0;i<=vx1;i++){var t=tile(i,j),px=i*T,py=j*T,r=hs(i,j),col;
+if(t===0)col='hsl(190,'+(70+r*6)+'%,'+(14+r*3)+'%)';
+else if(t===1)col='hsl(178,'+(55+r*8)+'%,'+(38+r*5)+'%)';
+else if(t===2)col='hsl(44,'+(55+r*10)+'%,'+(74+r*5)+'%)';
+else col='hsl('+(140+r*10)+',42%,'+(36+r*5)+'%)';
+x.fillStyle=col;x.fillRect(px,py,T+1,T+1);
+if(t<=1){x.strokeStyle='rgba(221,245,238,'+(t?.28:.12)+')';x.lineWidth=2;var wv=Math.sin(tt/600+i*.9+j*.7)*5;x.beginPath();x.moveTo(px+6,py+T*.4+wv);x.quadraticCurveTo(px+T/2,py+T*.4+wv-6,px+T-6,py+T*.4+wv);x.stroke()}
+if(t===2){x.fillStyle='rgba(120,90,40,.12)';x.fillRect(px+r*30,py+hs(j,i)*34,3,3);
+var ed=[[0,-1,px,py,T,5],[0,1,px,py+T-5,T,5],[-1,0,px,py,5,T],[1,0,px+T-5,py,5,T]];
+for(var e=0;e<4;e++){var q=ed[e];if(tile(i+q[0],j+q[1])===1){x.fillStyle='rgba(247,249,248,'+(.45+.25*Math.sin(tt/400+i))+')';x.fillRect(q[2],q[3],q[4],q[5])}}}
+if(t===3||t===4){x.fillStyle='rgba(20,80,50,.35)';x.fillRect(px+r*36,py+hs(j,i)*36,2,6);x.fillRect(px+hs(i+1,j)*36,py+hs(i,j+1)*36,2,5)}}}
+function shadow(px,py,rx,ry){x.fillStyle='rgba(0,0,0,.22)';x.beginPath();x.ellipse(px,py,rx,ry,0,0,6.3);x.fill()}
+function drawTree(o){var sw=Math.sin(tt/700+o.ph)*2,s=o.s;shadow(o.x+4,o.y+16,22*s,9*s);x.fillStyle='#6B4A2E';x.fillRect(o.x-4,o.y-4,8,22);
+[['#1F6B42',0,-22,22],['#2D8452',-9,-14,17],['#2D8452',10,-12,16],['#4AA568',-3,-30,13]].forEach(function(c){x.fillStyle=c[0];x.beginPath();x.arc(o.x+(c[1]+sw)*s,o.y+c[2]*s,c[3]*s,0,6.3);x.fill()})}
+function drawPin(o){var b=Math.sin(tt/320+o.ph)*5,g=x.createRadialGradient(o.x,o.y-28+b,2,o.x,o.y-28+b,46);g.addColorStop(0,'rgba(99,214,190,.6)');g.addColorStop(1,'rgba(99,214,190,0)');
+shadow(o.x,o.y+4,12,5);x.fillStyle=g;x.beginPath();x.arc(o.x,o.y-28+b,46,0,6.3);x.fill();
+x.fillStyle='#63D6BE';x.beginPath();x.arc(o.x,o.y-30+b,13,3.5,-.35);x.lineTo(o.x,o.y-4+b);x.closePath();x.fill();x.fillStyle='#082D32';x.beginPath();x.arc(o.x,o.y-30+b,5,0,6.3);x.fill()}
+function drawCrab(o){var w=Math.sin(tt/90+o.ph)*3;shadow(o.x,o.y+8,12,5);x.strokeStyle='#B84A38';x.lineWidth=2;
+for(var s=-1;s<=1;s+=2)for(var k=0;k<3;k++){x.beginPath();x.moveTo(o.x+s*6,o.y+k*3);x.lineTo(o.x+s*(14+w),o.y+k*3+5);x.stroke()}
+x.fillStyle='#E8664F';x.beginPath();x.ellipse(o.x,o.y,12,8,0,0,6.3);x.fill();x.beginPath();x.arc(o.x-14,o.y-8-w,5,0,6.3);x.arc(o.x+14,o.y-8+w,5,0,6.3);x.fill();
+x.fillStyle='#fff';x.beginPath();x.arc(o.x-4,o.y-8,2.5,0,6.3);x.arc(o.x+4,o.y-8,2.5,0,6.3);x.fill()}
+function drawBoat(o){var b=Math.sin(tt/500)*3;if(got===5){x.strokeStyle='rgba(99,214,190,'+(.4+.3*Math.sin(tt/200))+')';x.lineWidth=4;x.beginPath();x.arc(o.x,o.y+b,48,0,6.3);x.stroke()}
+shadow(o.x,o.y+16+b,28,8);x.fillStyle='#A9744A';x.beginPath();x.moveTo(o.x-30,o.y-4+b);x.lineTo(o.x+30,o.y-4+b);x.lineTo(o.x+20,o.y+14+b);x.lineTo(o.x-20,o.y+14+b);x.closePath();x.fill();
+x.fillStyle='#6B4A2E';x.fillRect(o.x-1.5,o.y-40+b,3,38);x.fillStyle='#F7F9F8';x.beginPath();x.moveTo(o.x+3,o.y-38+b);x.lineTo(o.x+26,o.y-8+b);x.lineTo(o.x+3,o.y-8+b);x.fill();
+x.fillStyle='#63D6BE';x.fillRect(o.x+3,o.y-18+b,15,4)}
+function drawP(o){var bob=o.m?Math.abs(Math.sin(o.w*11))*-3:0;if(inv>0&&Math.floor(tt/90)%2)x.globalAlpha=.4;
+shadow(o.x,o.y+12,11,5);x.save();x.translate(o.x,o.y+bob);x.scale(o.f,1);
+x.fillStyle='#63D6BE';x.fillRect(-12,-8,7,14);x.fillStyle='#F7F9F8';x.beginPath();x.ellipse(0,-2,9,11,0,0,6.3);x.fill();x.fillStyle='#082D32';x.fillRect(-9,3,18,5);
+x.fillStyle='#E8B48A';x.beginPath();x.arc(1,-16,7,0,6.3);x.fill();
+x.fillStyle='#E5C27A';x.beginPath();x.ellipse(1,-21,15,5,0,0,6.3);x.fill();x.fillStyle='#D9A95B';x.beginPath();x.arc(1,-23,8,3.14,6.28);x.fill();
+x.restore();x.globalAlpha=1}
+function draw(){
+x.setTransform(dpr*Z,0,0,dpr*Z,0,0);var vw=W/Z,vh=H/Z;
+cam.x+=(P.x-cam.x)*.12;cam.y+=(P.y-cam.y)*.12;var ox=cam.x-vw/2,oy=cam.y-vh/2;
+x.fillStyle='#0B4650';x.fillRect(0,0,vw,vh);x.save();x.translate(-ox,-oy);
+ground(Math.max(0,Math.floor(ox/T)-1),Math.max(0,Math.floor(oy/T)-1),Math.min(N-1,Math.ceil((ox+vw)/T)),Math.min(N-1,Math.ceil((oy+vh)/T)));
+var L=[P,boat].concat(pins,crabs);for(var i=0;i<trees.length;i++){var t=trees[i];if(t.x>ox-60&&t.x<ox+vw+60&&t.y>oy-70&&t.y<oy+vh+60)L.push(t)}
+L.sort(function(a,b){return a.y-b.y});
+for(i=0;i<L.length;i++){var o=L[i];o.k==='tree'?drawTree(o):o.k==='pin'?drawPin(o):o.k==='crab'?drawCrab(o):o.k==='boat'?drawBoat(o):drawP(o)}
+for(i=0;i<sparks.length;i++){var s=sparks[i];x.globalAlpha=Math.max(0,s.l*1.25);x.fillStyle=s.c;x.beginPath();x.arc(s.x,s.y,3.5,0,6.3);x.fill()}x.globalAlpha=1;
+var tg=got<5?pins[0]:boat;if(tg){var bd=1e9;if(got<5)for(i=0;i<pins.length;i++){var dd=Math.hypot(pins[i].x-P.x,pins[i].y-P.y);if(dd<bd){bd=dd;tg=pins[i]}}else bd=Math.hypot(tg.x-P.x,tg.y-P.y);
+if(bd>130){var an=Math.atan2(tg.y-P.y,tg.x-P.x);x.save();x.translate(P.x+Math.cos(an)*56,P.y+Math.sin(an)*56-8);x.rotate(an);x.fillStyle='rgba(99,214,190,.95)';x.beginPath();x.moveTo(12,0);x.lineTo(-7,-9);x.lineTo(-3,0);x.lineTo(-7,9);x.closePath();x.fill();x.restore()}}
+x.restore();
+var g=x.createRadialGradient(vw/2,vh/2,Math.min(vw,vh)*.35,vw/2,vh/2,Math.max(vw,vh)*.75);g.addColorStop(0,'rgba(8,45,50,0)');g.addColorStop(1,'rgba(8,45,50,.55)');x.fillStyle=g;x.fillRect(0,0,vw,vh);
+if(joy){x.setTransform(dpr,0,0,dpr,0,0);x.strokeStyle='rgba(247,249,248,.5)';x.lineWidth=3;x.beginPath();x.arc(joy.ox,joy.oy,34,0,6.3);x.stroke();x.fillStyle='rgba(99,214,190,.7)';var jl=Math.min(34,Math.hypot(joy.x-joy.ox,joy.y-joy.oy)),ja=Math.atan2(joy.y-joy.oy,joy.x-joy.ox);x.beginPath();x.arc(joy.ox+Math.cos(ja)*jl,joy.oy+Math.sin(ja)*jl,16,0,6.3);x.fill()}}
+var last=0;
+function loop(n){tt=n;var dt=Math.min(.05,(n-last)/1000||0);last=n;if(st==='play')update(dt);draw();requestAnimationFrame(loop)}
+reset();st='intro';requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
